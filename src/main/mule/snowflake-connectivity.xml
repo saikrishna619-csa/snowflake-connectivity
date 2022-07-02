@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" xmlns:json-logger="http://www.mulesoft.org/schema/mule/json-logger"
+	xmlns:db="http://www.mulesoft.org/schema/mule/db"
+	xmlns:snowflake="http://www.mulesoft.org/schema/mule/snowflake" xmlns:jms="http://www.mulesoft.org/schema/mule/jms" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/jms http://www.mulesoft.org/schema/mule/jms/current/mule-jms.xsd
+http://www.mulesoft.org/schema/mule/snowflake http://www.mulesoft.org/schema/mule/snowflake/current/mule-snowflake.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/json-logger http://www.mulesoft.org/schema/mule/json-logger/current/mule-json-logger.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+	<jms:config name="JMS_Config" doc:name="JMS Config" doc:id="8d9efb13-85c8-431c-90fe-5edffc120444" >
+		<jms:active-mq-connection username="admin" password="admin" >
+			<jms:factory-configuration brokerUrl="tcp://localhost:61616" />
+		</jms:active-mq-connection>
+	</jms:config>
+	<snowflake:snowflake-config name="Snowflake_Config" doc:name="Snowflake Config" doc:id="b44c546d-8a31-4389-a88a-0712f8a187aa" >
+		<snowflake:snowflake-connection accountName="lj32117.ap-southeast-1" warehouse="COMPUTE_WH" database="MULESOFTLOGGING" schema="PUBLIC" user="saikrishna619" password="Brmdec3012@" />
+	</snowflake:snowflake-config>
+	<json-logger:config name="JSON_Logger_Config" doc:name="JSON Logger Config" doc:id="f7395e3b-8938-4922-96dd-b6c872b18707" environment="${mule.env}" contentFieldsDataMasking="$..Account,$..AccountNumber">
+		<json-logger:external-destination >
+			<json-logger:jms-destination jmsConfigurationRef="JMS_Config" queueDestination="log" maxBatchSize="30"/>
+		</json-logger:external-destination>
+	</json-logger:config>
+	<sub-flow name="start-flow" doc:id="a520e0ed-23e0-4a44-8ee5-71e4929b37fa" >
+		<choice doc:name="Choice" doc:id="8850f069-6a1f-488f-80d9-4dc003082383" >
+			<when expression="#[p('logging.toggle') == 'ON']">
+				<async doc:name="Async" doc:id="32b0c3d8-9350-4485-ae65-a805ac417add">
+			<json-logger:logger doc:name="Logger" doc:id="2de2f2e1-35df-47ad-992d-fe2cab29afe2" config-ref="JSON_Logger_Config" message="#[vars.vTransactionId]">
+				<json-logger:content><![CDATA[#[import modules::JSONLoggerModule output application/json ---
+{
+    payload: (JSONLoggerModule::stringifyNonJSON(payload ) ),
+  responsetime: vars.vResponseTime,
+     flowname:  vars.flowname 
+}]]]></json-logger:content>
+			</json-logger:logger>
+		</async>
+			</when>
+			<otherwise >
+				<logger level="INFO" doc:name="Logger" doc:id="4ddef2fb-daa5-43fb-8232-6f3e55589b28" message="#[p('logging.disabled')]"/>
+			</otherwise>
+		</choice>
+	</sub-flow>
+	<sub-flow name="End-flow" doc:id="569728d2-9f51-4315-820d-268717df4d9e" >
+		<async doc:name="Async" doc:id="a51b5c2a-b470-48a6-b0c1-f6671ec08e08" >
+			<choice doc:name="Choice" doc:id="59a4257f-939a-4801-b153-78c38ed97ab6">
+			<when expression="#[p('logging.toggle') == 'ON']">
+					<json-logger:logger doc:name="Logger" doc:id="4a1d5b8e-bf00-4d1b-b994-03c0e98a4a0f" config-ref="JSON_Logger_Config" message="#[vars.vTransactionId]" tracePoint="END">
+				<json-logger:content><![CDATA[#[import modules::JSONLoggerModule output application/json ---
+{
+    payload: JSONLoggerModule::stringifyNonJSON(payload) ,
+      responsetime: vars.vResponseTime,
+    flowname: vars.flowname
+}]]]></json-logger:content>
+			</json-logger:logger>
+				</when>
+				<otherwise >
+					<logger level="INFO" doc:name="Logger" doc:id="03d3058c-ab74-4235-829f-c7b3784ed4e5" message="#[p('logging.disabled')]"/>
+				</otherwise>
+		</choice>
+		</async>
+	</sub-flow>
+	<flow name="snowflake-connectivityFlow1" doc:id="06dd8983-1f2e-45a9-b788-7fbd1a6fa1da" >
+		<ee:transform doc:name="Transform Message" doc:id="0a915198-7eb4-4f58-a7fe-4bdeadbc29ec" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+read(payload,"application/json")]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<try doc:name="Try" doc:id="b987d347-c4ed-4066-8051-c98b67b13bef" >
+			<snowflake:insert doc:name="Insert" doc:id="d9067ebf-8e72-4ae0-a59f-d3e8b74217d9" config-ref="Snowflake_Config">
+			<snowflake:sql><![CDATA[Insert into logging(correlationId,message,tracePoint,timestamp,payload,applicationName,transactionno,flowname,responsetime) values(:correlationId,:message,:tracePoint,:timestamp,:payload,:applicationName,:transactionno,:flowname,:responsetime);]]></snowflake:sql>
+			<snowflake:input-parameters><![CDATA[#[%dw 2.0
+output application/json
+
+---
+{
+"correlationId": payload[0].correlationId,
+"message": payload[0].message,
+"tracePoint":payload[0].tracePoint,
+"timestamp":payload[0].timestamp,
+"payload":payload[0].content.payload,
+"applicationName":payload[0].applicationName,
+"transactionno": payload[0].content.trns,
+"flowname": payload[0].content.flowname,
+"responsetime": payload[0].content.responsetime default ""
+}]]]></snowflake:input-parameters>
+		</snowflake:insert>
+			<error-handler >
+				<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue" doc:id="1d530b31-b3e9-4cd5-b460-fbb8581a901a" >
+					<ee:transform doc:name="Transform Message" doc:id="0eeda0c1-0992-4357-b893-c25d4b87e86b" >
+						<ee:message >
+							<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+{
+
+errorcode: error.errorType,
+errormessage: error.errorMessage
+	
+}]]></ee:set-payload>
+						</ee:message>
+					</ee:transform>
+				</on-error-continue>
+			</error-handler>
+		</try>
+	</flow>
+	<flow name="snowflake-connectivityFlow" doc:id="1907f47b-fd02-4e5e-96af-5b5edb7f057c" >
+		<jms:listener doc:name="On New Message" doc:id="d8cfc0d0-3ba3-4e16-9d81-1d3810715d88" config-ref="JMS_Config" destination="log">
+			<jms:response outboundContentType="application/json" />
+		</jms:listener>
+		<ee:transform doc:name="Transform Message" doc:id="dabfe653-8435-455f-a00b-d2c7594c73f2" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+read(payload,"application/json")]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<try doc:name="Try" doc:id="f336dc4b-5469-43b8-aa99-7495423383a5" >
+			<snowflake:bulk-insert doc:name="Bulk insert" doc:id="2d1a4a88-e08b-496a-a94c-4577899edf59" config-ref="Snowflake_Config">
+			<snowflake:bulk-input-parameters><![CDATA[#[%dw 2.0
+output application/json
+
+---
+payload map {
+"correlationId": $.correlationId,
+"message": $.message  default "",
+"tracePoint":$.tracePoint,
+"timestamp":$.timestamp,
+"payload":$.content.payload,
+"applicationName":$.applicationName,
+//"transactionno": $.content.trns,
+"flowname": $.content.flowname,
+"responsetime": $.content.responsetime default ""
+
+}]]]></snowflake:bulk-input-parameters>
+			<snowflake:sql><![CDATA[Insert into logging(CorrelationId,TransactionRefNo,TracePoint,TimeStamp,payload,ApplicationName,FlowName,ResponseTime) values(:correlationId,:message,:tracePoint,:timestamp,:payload,:applicationName,:flowname,:responsetime);]]></snowflake:sql>
+		</snowflake:bulk-insert>
+			<error-handler >
+				<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue" doc:id="914b434e-0994-4e2b-bf01-39106104ed56" >
+					<ee:transform doc:name="Transform Message" doc:id="30093c64-2a8e-4bd3-8e13-c6e578bb2971" >
+						<ee:message >
+							<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+{
+
+errorcode: error.errorType,
+errormessage: error.errorMessage
+	
+}]]></ee:set-payload>
+						</ee:message>
+					</ee:transform>
+				</on-error-continue>
+			</error-handler>
+		</try>
+	</flow>
+</mule>
